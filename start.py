@@ -43,8 +43,14 @@ async def main():
 
     logger.info("Starting Martingale Bot in %s mode on symbol %s", settings.MODE, settings.SYMBOL)
 
-    # Start runner
-    runner = MartingaleRunner(settings, logger)
+    # 創建API客戶端 - 修改參數名稱
+    client = BackpackAPIClient(
+        api_key=settings.API_KEY,
+        secret_key=settings.API_SECRET  # 從api_secret改為secret_key
+    )
+
+    # Start runner - 傳入client參數
+    runner = MartingaleRunner(client, settings.SYMBOL, settings, logger)
     await runner.run()
 
 if __name__ == "__main__":

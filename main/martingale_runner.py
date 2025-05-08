@@ -9,21 +9,32 @@ from api.client import BackpackAPIClient
 from utils.logger import init_logger  # optional: logging setup
 from config import settings  # 包含 API 金鑰、參數設定等
 
-logger = setup_logger(__name__) if 'setup_logger' in globals() else logging.getLogger(__name__)
+logger = init_logger(__name__) if 'init_logger' in globals() else logging.getLogger(__name__)
 
 
 class MartingaleRunner:
-    def __init__(self, client: BackpackAPIClient, symbol: str):
-        self.client = client
-        self.symbol = symbol
-
-        self.strategy = MartingaleStrategy(settings, self.logger)  # Add logger parameter
-        self.executor = OrderExecutor(client, symbol, settings)
-        self.monitor = OrderMonitor(client)
-
-        self.active_orders = []  # 儲存目前掛單資訊
+    def __init__(self, settings, logger):
+        self.settings = settings
+        self.logger = logger
+        
+        # 在內部創建client
+        self.client = BackpackAPIClient(
+            api_key=settings.API_KEY,
+            api_secret=settings.API_SECRET
+        )
+        self.symbol = settings.SYMBOL
+        
+        # 初始化策略組件
+        self.strategy = MartingaleStrategy(settings, logger)
+        self.executor = OrderExecutor(self.client, self.symbol, settings)
+        self.monitor = OrderMonitor(self.client)
+        
+        # 初始化狀態變量
+        self.active_orders = []
         self.holding_position = False
         self.entry_price = None
+        
+        self.logger.info(f"✅ Runner 初始化完成: Symbol={self.symbol}")
 
     async def reset(self):
         logger.info("重置狀態，取消所有掛單")
@@ -83,7 +94,7 @@ async def main():
         api_key=settings.API_KEY,
         api_secret=settings.API_SECRET
     )
-    runner = MartingaleRunner(client, symbol=settings.SYMBOL)
+    runner = MartingaleRunner(client, settings.SYMBOL, settings, logger)
     await runner.run()
 
 

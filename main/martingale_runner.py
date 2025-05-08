@@ -6,7 +6,7 @@ from core.order_executor import OrderExecutor
 from core.strategy import MartingaleStrategy
 from core.order_monitor import OrderMonitor
 from api.client import BackpackAPIClient
-from utils.logger import setup_logger  # optional: logging setup
+from utils.logger import init_logger  # optional: logging setup
 from config import settings  # 包含 API 金鑰、參數設定等
 
 logger = setup_logger(__name__) if 'setup_logger' in globals() else logging.getLogger(__name__)
@@ -17,7 +17,7 @@ class MartingaleRunner:
         self.client = client
         self.symbol = symbol
 
-        self.strategy = MartingaleStrategy(settings)
+        self.strategy = MartingaleStrategy(settings, self.logger)  # Add logger parameter
         self.executor = OrderExecutor(client, symbol, settings)
         self.monitor = OrderMonitor(client)
 

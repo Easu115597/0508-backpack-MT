@@ -1,13 +1,15 @@
 import asyncio
 import time
+import logging
 from collections import defaultdict
 
 class OrderMonitor:
     def __init__(self, client, symbol: str):
         self.client = client
         self.symbol = symbol
+        
         self.open_orders = {}  # order_id: {info}
-        self.filled_orders = []  # list of filled order_ids
+        self.filled_orders = {}  # 改為字典: order_id: order_info
         self.active_orders = {}
         
         self.order_status_cache = defaultdict(lambda: "unknown")
@@ -17,85 +19,64 @@ class OrderMonitor:
         """
         加入新的掛單進追蹤池
         """
-        self.open_orders[order["order_id"]] = order
-        self.active_orders[order_id] = symbol
+        order_id = order["id"]  # 修正: 使用正確的ID字段
+        self.open_orders[order_id] = order
+        self.active_orders[order_id] = self.symbol  # 修正: 使用self.symbol
         self.order_status_cache[order_id] = "new"
+        self.logger.info(f"開始追蹤訂單: {order_id}")
 
-    def untrack_all(self):
-        """
-        清空所有追蹤的掛單（例如止盈後全撤單情況）
-        """
-        self.open_orders.clear()
+    def track_orders(self, orders):
+        """批量追蹤多個訂單"""
+        for order in orders:
+            self.track_order(order)
 
-    def get_filled_order_ids(self):
-        return self.filled_orders
-
-    async def check_orders(self):
-        """
-        逐一查詢目前追蹤的掛單狀態，偵測是否成交或取消
-        """
-        to_remove = []
-        for order_id, order in self.open_orders.items():
-            try:
-                result = await self.client.get_order(order_id)
-                status = result.get("status")
-
-                if status == "filled":
-                    self.filled_orders.append(order_id)
-                    to_remove.append(order_id)
-
-                elif status == "cancelled":
-                    to_remove.append(order_id)
-
-            except Exception as e:
-                print(f"[OrderMonitor] 查詢訂單 {order_id} 時發生錯誤: {e}")
-
-        for oid in to_remove:
-            self.open_orders.pop(oid, None)
-
-    async def loop_check(self, interval=2):
-        while True:
-            await self.check_orders()
-            await asyncio.sleep(interval)
-
-    def has_open_orders(self):
-        return len(self.open_orders) > 0
-
-    def reset(self):
-        self.open_orders = {}
-        self.filled_orders = []
+    async def wait_for_first_fill(self, timeout=60):
+        """等待第一筆成交訂單，有超時機制"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            await self.update_statuses()
+            if self.filled_orders:
+                # 返回第一個成交的訂單
+                order_id = next(iter(self.filled_orders))
+                return self.filled_orders[order_id]
+            await asyncio.sleep(1)
+        return None
 
     async def update_statuses(self):
+        """更新所有活動訂單狀態"""
         for order_id, symbol in list(self.active_orders.items()):
             try:
                 order_data = await self.client.get_order(order_id=order_id)
                 status = order_data.get("status")
 
                 if status != self.order_status_cache[order_id]:
-                    self.logger.info(f"Order {order_id} status updated: {status}")
+                    self.logger.info(f"訂單 {order_id} 狀態更新: {status}")
                     self.order_status_cache[order_id] = status
 
                 if status == "filled":
-                    self.filled_orders[order_id] = symbol
+                    self.filled_orders[order_id] = order_data
                     del self.active_orders[order_id]
 
                 elif status in ["cancelled", "rejected", "expired"]:
                     del self.active_orders[order_id]
 
             except Exception as e:
-                self.logger.warning(f"Order status check failed: {e}")
+                self.logger.warning(f"訂單狀態檢查失敗: {e}")
 
     def get_filled_orders(self):
+        """獲取所有已成交訂單"""
         return self.filled_orders.copy()
 
     def clear_filled_orders(self):
+        """清空已成交訂單記錄"""
         self.filled_orders.clear()
 
     async def cancel_all(self):
+        """取消所有活動訂單"""
         for order_id in list(self.active_orders.keys()):
             try:
                 await self.client.cancel_order(order_id)
-                self.logger.info(f"Cancelled order: {order_id}")
+                self.logger.info(f"已取消訂單: {order_id}")
             except Exception as e:
-                self.logger.warning(f"Failed to cancel order {order_id}: {e}")
+                self.logger.warning(f"取消訂單 {order_id} 失敗: {e}")
         self.active_orders.clear()

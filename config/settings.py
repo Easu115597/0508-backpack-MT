@@ -35,6 +35,8 @@ class Settings:
         self.api_url = API_URL
         self.api_version = API_VERSION
         self.default_window = DEFAULT_WINDOW
+        self.API_KEY = API_KEY
+        self.API_SECRET = API_SECRET
         
     @classmethod
     def get_instance(cls):

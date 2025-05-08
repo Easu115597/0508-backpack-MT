@@ -13,28 +13,28 @@ logger = init_logger(__name__) if 'init_logger' in globals() else logging.getLog
 
 
 class MartingaleRunner:
-    def __init__(self, settings, logger):
+    def __init__(self, client, symbol, settings, logger):
         self.settings = settings
         self.logger = logger
         
         # 在內部創建client
         self.client = BackpackAPIClient(
             api_key=settings.API_KEY,
-            api_secret=settings.API_SECRET
+            secret_key=settings.API_SECRET
         )
-        self.symbol = settings.SYMBOL
+        self.symbol = symbol
         
         # 初始化策略組件
         self.strategy = MartingaleStrategy(settings, logger)
-        self.executor = OrderExecutor(self.client, self.symbol, settings)
-        self.monitor = OrderMonitor(self.client)
+        self.executor = OrderExecutor(self.client, self.symbol)
+        self.monitor = OrderMonitor(self.client, self.symbol)
         
         # 初始化狀態變量
         self.active_orders = []
         self.holding_position = False
         self.entry_price = None
         
-        self.logger.info(f"✅ Runner 初始化完成: Symbol={self.symbol}")
+        self.logger.info(f"[OK] Runner 初始化完成: Symbol={self.symbol}")
 
     async def reset(self):
         logger.info("重置狀態，取消所有掛單")
@@ -48,7 +48,7 @@ class MartingaleRunner:
             try:
                 if not self.holding_position:
                     logger.info("尚未持倉，開始掛單")
-                    order_plan = self.strategy.generate_entry_orders()
+                    order_plan = self.strategy.generate_orders()
 
                     self.active_orders = await self.executor.place_orders(order_plan)
                     self.monitor.track_orders(self.active_orders)
@@ -92,9 +92,9 @@ class MartingaleRunner:
 async def main():
     client = BackpackAPIClient(
         api_key=settings.API_KEY,
-        api_secret=settings.API_SECRET
+        secret_key=settings.API_SECRET
     )
-    runner = MartingaleRunner(client, settings.SYMBOL, settings, logger)
+    runner = MartingaleRunner(client, settings, logger)
     await runner.run()
 
 

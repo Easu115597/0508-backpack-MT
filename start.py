@@ -1,13 +1,26 @@
 
 
-import os
+
 import asyncio
 import argparse
 from dotenv import load_dotenv
-from core.strategy import MartingaleStrategy
+import os
 from main.martingale_runner import MartingaleRunner
 from config.settings import Settings
 from utils.logger import init_logger
+from api.client import BackpackAPIClient
+
+load_dotenv()  # 載入.env文件
+
+api_key = os.getenv("BACKPACK_API_KEY")
+secret_key = os.getenv("BACKPACK_API_SECRET")
+client = BackpackAPIClient(api_key=api_key, secret_key=secret_key)
+order = client.execute_order({
+    "symbol": "BTC_USDC",
+    "side": "Bid",
+    "orderType": "Market",
+    "quoteQuantity": 10
+})
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Martingale Trading Bot")

@@ -39,3 +39,17 @@ class OrderExecutor:
         except Exception as e:
             self.logger.error(f"Market order failed: {e}")
             return None
+        
+    async def cancel_all_orders(self, symbol):
+        try:
+            result = await self.client.cancel_all_orders(symbol=symbol)
+            self.logger.info(f"Canceled all orders for {symbol}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Cancel all orders failed: {e}")
+            return None
+
+    async def close_position(self, symbol, size):
+        """Close position with market order"""
+        side = "sell"  # For long positions
+        return await self.place_market_order(symbol, side, size)

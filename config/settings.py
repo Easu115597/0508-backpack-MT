@@ -10,20 +10,19 @@ API_VERSION = "v1"
 DEFAULT_WINDOW = 5000
 
 API_KEY = os.getenv("BACKPACK_API_KEY")
-API_SECRET = os.getenv("BACKPACK_API_SECRET")
+SECRET_KEY = os.getenv("SECRET_KEY")
 SYMBOL = os.getenv("SYMBOL", "SOL_USDC")
 
-API_URL = os.getenv("API_URL", "https://api.backpack.exchange")
-API_VERSION = os.getenv("API_VERSION", "v1")
-DEFAULT_WINDOW = int(os.getenv("DEFAULT_WINDOW", 5000))
 
 # 策略參數
-TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", 0.02))      # 1%
+TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", 0.033))      # 3.3%
 STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", -0.3))         # -30%
-PRICE_STEP_DOWN = float(os.getenv("PRICE_STEP_DOWN", 0.005))     # -0.5%
-MULTIPLIER = float(os.getenv("MULTIPLIER", 2))
-USE_MARKET_ORDER = os.getenv("USE_MARKET_ORDER", "false").lower() == "true"
-ENTRY_SIZE_USDT = float(os.getenv("ENTRY_SIZE_USDT", 10))
+PRICE_STEP_DOWN = float(os.getenv("PRICE_STEP_DOWN", 0.015))     # -1.5%
+MULTIPLIER = float(os.getenv("MULTIPLIER", 1.3))
+USE_MARKET_ORDER = os.getenv("USE_MARKET_ORDER", "false").lower() == "false"
+ENTRY_SIZE_USDT = float(os.getenv("ENTRY_SIZE_USDT", 100))
+MAX_LAYERS = int(os.getenv("MAX_LAYERS", 3))  # 默認3層
+
 
 # 監控設定
 ORDER_TIMEOUT_SEC = int(os.getenv("ORDER_TIMEOUT_SEC", 20))
@@ -36,8 +35,22 @@ class Settings:
         self.api_version = API_VERSION
         self.default_window = DEFAULT_WINDOW
         self.API_KEY = API_KEY
-        self.API_SECRET = API_SECRET
-        
+        self.SECRET_KEY = SECRET_KEY
+        # 添加所有策略需要的屬性
+        self.ENTRY_SIZE_USDT = ENTRY_SIZE_USDT
+        self.MAX_LAYERS = MAX_LAYERS
+        self.MULTIPLIER = MULTIPLIER
+        self.TAKE_PROFIT_PCT = TAKE_PROFIT_PCT
+        self.STOP_LOSS_PCT = STOP_LOSS_PCT
+        self.PRICE_STEP_DOWN = PRICE_STEP_DOWN
+        self.USE_MARKET_ORDER = USE_MARKET_ORDER
+        self.SYMBOL = SYMBOL
+        self.ORDER_TIMEOUT_SEC = ORDER_TIMEOUT_SEC
+    
     @classmethod
     def get_instance(cls):
         return cls()
+    
+    @property
+    def API_SECRET(self):
+        return self.SECRET_KEY

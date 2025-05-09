@@ -24,9 +24,10 @@ class Strategy:
         return current_price <= avg_entry_price * (1 - self.stop_loss_pct)
     
 class MartingaleStrategy:
-    def __init__(self, settings, logger):
+    def __init__(self, settings, logger, client=None):
         self.settings = settings
         self.logger = logger
+        self.client = client
         # 初始化策略狀態
         self.active_orders = []
         self.total_bought = 0  # 解決'total_bought'屬性缺失問題
@@ -49,8 +50,8 @@ class MartingaleStrategy:
         orders.append({
             "price": round(base_price, 1),  # 根據交易所精度調整
             "quantity": round(allocated_funds[0] / base_price, 5),
-            "type": "limit",
-            "side": "buy"
+            "type": "Limit",
+            "side": "Bid"
         })
         
         return orders
@@ -76,7 +77,7 @@ class MartingaleStrategy:
             orders.append({
                 "price": round(price, 1),
                 "quantity": round(quantity, 5),
-                "type": "limit",
+                "type": "Limit",
                 "side": "buy"
             })
             
@@ -120,12 +121,13 @@ class MartingaleStrategy:
     async def get_current_price(self):
         """獲取當前市場價格"""
         try:
-            if self.client:
+            if hasattr(self.client, 'get_ticker'):
                 ticker = await self.client.get_ticker(self.settings.SYMBOL)
-                return float(ticker['lastPrice'])
-            else:
-                # 無client時使用入場價格
-                return float(self.settings.ENTRY_PRICE)
+                if ticker and 'lastPrice' in ticker:
+                    return float(ticker['lastPrice'])
+            # 如果API調用失敗，使用入場價格作為備用
+            self.logger.warning("無法獲取市場價格，使用入場價格作為備用")
+            return float(self.settings.ENTRY_PRICE)
         except Exception as e:
             self.logger.error(f"獲取價格失敗: {str(e)}")
             return float(self.settings.ENTRY_PRICE)

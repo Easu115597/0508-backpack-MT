@@ -43,23 +43,15 @@ class OrderMonitor:
         return None
 
     async def update_statuses(self):
-        """更新所有活動訂單狀態"""
-        for order_id, symbol in list(self.active_orders.items()):
+        for order_id in list(self.active_orders.keys()):
             try:
-                order_data = await self.client.get_order(order_id=order_id)
-                status = order_data.get("status")
-
-                if status != self.order_status_cache[order_id]:
-                    self.logger.info(f"訂單 {order_id} 狀態更新: {status}")
-                    self.order_status_cache[order_id] = status
-
-                if status == "filled":
-                    self.filled_orders[order_id] = order_data
-                    del self.active_orders[order_id]
-
-                elif status in ["cancelled", "rejected", "expired"]:
-                    del self.active_orders[order_id]
-
+                # 傳入symbol參數
+                order_data = await self.client.get_order(order_id, self.symbol)
+                if order_data and 'status' in order_data:
+                    status = order_data.get("status")
+                    # 處理訂單狀態...
+                else:
+                    self.logger.warning(f"無法獲取訂單 {order_id} 的狀態")
             except Exception as e:
                 self.logger.warning(f"訂單狀態檢查失敗: {e}")
 

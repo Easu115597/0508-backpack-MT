@@ -3,9 +3,9 @@
 import logging
 
 class OrderExecutor:
-    def __init__(self, client, monitor):
+    def __init__(self, client, symbol):
         self.client = client
-        self.monitor = monitor
+        self.symbol = symbol
         self.logger = logging.getLogger(__name__)
 
     async def place_limit_order(self, symbol, side, price, size):
@@ -24,6 +24,23 @@ class OrderExecutor:
         except Exception as e:
             self.logger.error(f"Limit order failed: {e}")
             return None
+        
+    async def place_orders(self, order_plan):
+        """批量下單"""
+        placed_orders = []
+        for order in order_plan:
+            try:
+                result = await self.place_limit_order(
+                    symbol=self.symbol,
+                    side=order["side"],
+                    price=order["price"],
+                    size=order["quantity"]
+                )
+                if result:
+                    placed_orders.append(result)
+            except Exception as e:
+                self.logger.error(f"下單失敗: {e}")
+        return placed_orders
 
     async def place_market_order(self, symbol, side, size):
         try:

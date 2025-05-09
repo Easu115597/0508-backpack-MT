@@ -7,6 +7,7 @@ import hashlib
 import requests
 import logging
 import nacl.signing
+import aiohttp
 from datetime import datetime
 
 
@@ -18,11 +19,12 @@ DEFAULT_WINDOW = 5000
 logger = logging.getLogger(__name__)
 
 class BackpackAPIClient:
-    def __init__(self, api_key=None, secret_key=None):
+    def __init__(self, api_key=None, secret_key=None, symbol=None):
         self.api_key = api_key
         self.secret_key = secret_key
         self.base_url = API_URL  # 確保使用正確的變數名
         self.default_window = DEFAULT_WINDOW
+        self.symbol = symbol
         self.time_offset = 0
         self.logger = logging.getLogger(__name__)
         self._sync_server_time()
@@ -42,54 +44,126 @@ class BackpackAPIClient:
             return False
 
     def _generate_signature(self, params, instruction="orderExecute"):
-        timestamp = str(int(time.time() * 1000) + self.time_offset)
-        window = str(self.default_window)
-        
-        # 排序參數
-        if isinstance(params, dict):
-            # 轉換布爾值
-            for k, v in params.items():
-                if isinstance(v, bool):
-                    params[k] = str(v).lower()
+        try:
+            timestamp = str(int(time.time() * 1000))
+            window = str(self.default_window)
             
-            sorted_params = sorted(params.items())
-            param_str = "&".join([f"{k}={v}" for k, v in sorted_params])
-        else:
-            param_str = params
-        
-        # 構建簽名消息
-        message = f"instruction={instruction}&{param_str}&timestamp={timestamp}&window={window}"
-        
-        # 生成簽名
-        private_key = nacl.signing.SigningKey(base64.b64decode(self.secret_key))
-        signature = base64.b64encode(private_key.sign(message.encode('ascii')).signature).decode()
-        
-        return signature
+            # 排序參數並轉換為查詢字符串
+            if isinstance(params, dict):
+                # 轉換布爾值
+                params_copy = params.copy()
+                for k, v in params_copy.items():
+                    if isinstance(v, bool):
+                        params_copy[k] = str(v).lower()
+                
+                # 按字母順序排序
+                sorted_params = sorted(params_copy.items())
+                param_str = "&".join([f"{k}={v}" for k, v in sorted_params])
+            else:
+                param_str = params
+            
+            # 構建簽名消息
+            message = f"instruction={instruction}&{param_str}&timestamp={timestamp}&window={window}"
+            
+            # 使用PyNaCl生成ED25519簽名
+            import nacl.signing
+            import base64
+            
+            # 解碼私鑰
+            private_key_bytes = base64.b64decode(self.secret_key)
+            signing_key = nacl.signing.SigningKey(private_key_bytes)
+            
+            # 簽名
+            signed = signing_key.sign(message.encode('ascii'))
+            signature = base64.b64encode(signed.signature).decode()
+            
+            # 返回簽名、時間戳和窗口
+            return {
+                "signature": signature,
+                "timestamp": timestamp,
+                "window": window
+            }
+        except Exception as e:
+            self.logger.error(f"簽名生成失敗: {str(e)}")
+            return None
     
-    def _generate_headers(self, instruction, params=None):
-        """生成API請求頭"""
-        timestamp = str(int(time.time() * 1000) + self.time_offset)
-        window = str(DEFAULT_WINDOW)
+    def _generate_headers(self, instruction, params):
+        sig_data = self._generate_signature(params, instruction)
+        if not sig_data:
+            return {}
         
-        # 構建簽名消息
-        message = f"instruction={instruction}"
-        if params:
-            sorted_params = sorted(params.items())
-            param_str = "&".join([f"{k}={v}" for k, v in sorted_params])
-            if param_str:
-                message += f"&{param_str}"
-        message += f"&timestamp={timestamp}&window={window}"
-        
-        # 生成簽名
-        signature = self._generate_signature(message)
-        
-        return {
+        headers = {
             "X-API-KEY": self.api_key,
-            "X-SIGNATURE": signature,
-            "X-TIMESTAMP": timestamp,
-            "X-WINDOW": window,
+            "X-SIGNATURE": sig_data["signature"],
+            "X-TIMESTAMP": sig_data["timestamp"],
+            "X-WINDOW": sig_data["window"],
             "Content-Type": "application/json"
         }
+        return headers
+        
+    async def public_request(self, endpoint, params=None):
+        """發送公共API請求"""
+        try:
+            url = f"{self.base_url}/api/v1/{endpoint}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        self.logger.error(f"公共請求失敗: {response.status}, {await response.text()}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"公共請求異常: {e}")
+            return None
+        
+    async def get_order(self, order_id, symbol):
+        """獲取訂單狀態"""
+        try:
+            endpoint = "/api/v1/order"
+            params = {
+                "orderId": order_id,
+                "symbol": symbol  # 使用傳入的symbol
+            }
+            instruction = "orderQuery"
+            
+            # 生成請求頭
+            headers = self._generate_headers(instruction, params)
+            
+            # 使用aiohttp進行異步請求
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.base_url}{endpoint}",
+                    params=params,
+                    headers=headers
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        error_msg = f"狀態碼: {response.status}, 消息: {await response.text()}"
+                        self.logger.warning(f"獲取訂單失敗: {error_msg}")
+                        return None
+                    
+        except Exception as e:
+            self.logger.error(f"獲取訂單異常: {str(e)}")
+            return None
+    
+    async def get_ticker(self, symbol):
+        """獲取指定交易對的行情信息"""
+        try:
+            # 直接使用requests而非依賴public_request
+            url = f"{self.base_url}/api/v1/ticker"
+            params = {"symbol": symbol}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        self.logger.error(f"獲取行情失敗: {response.status}, {await response.text()}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"獲取行情異常: {e}")
+            return None
     
     async def place_order(self, symbol, side, order_type, price=None, size=None):
         """兼容性方法，內部調用execute_order"""
@@ -129,8 +203,8 @@ class BackpackAPIClient:
             logger.error(f"市場限制解析異常: {str(e)}")
             return {}
     
-    def execute_order(self, order_details):
-        """執行訂單"""
+    async def execute_order(self, order_details):
+        """執行訂單（異步方法）"""
         endpoint = "/api/v1/order"
         instruction = "orderExecute"
         
@@ -150,29 +224,31 @@ class BackpackAPIClient:
             if 'quantity' in order_details:
                 order_details['quantity'] = str(order_details['quantity'])
         
-        # 布爾值轉字符串
+        # 布爾值處理 - 嘗試不同格式
         if 'postOnly' in order_details:
-            order_details['postOnly'] = str(order_details['postOnly']).lower()
+            # 移除postOnly參數，看看是否能解決問題
+            del order_details['postOnly']
         
         # 生成請求頭
         headers = self._generate_headers(instruction, order_details)
         
         try:
-            response = requests.post(
-                f"{self.base_url}{endpoint}",
-                json=order_details,
-                headers=headers
-            )
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                error_msg = f"狀態碼: {response.status_code}, 消息: {response.text}"
-                logger.warning(f"請求失敗 (1/3): {error_msg}")
-                return {"error": error_msg}
-                
+            # 使用aiohttp進行異步請求
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.base_url}{endpoint}",
+                    json=order_details,
+                    headers=headers
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        error_msg = f"狀態碼: {response.status}, 消息: {await response.text()}"
+                        self.logger.warning(f"請求失敗 (1/3): {error_msg}")
+                        return {"error": error_msg}
+                    
         except Exception as e:
-            logger.error(f"訂單執行失敗: {str(e)}")
+            self.logger.error(f"訂單執行失敗: {str(e)}")
             return {"error": str(e)}
     
     def get_balance(self, asset=None):

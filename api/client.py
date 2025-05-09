@@ -22,7 +22,9 @@ class BackpackAPIClient:
         self.api_key = api_key
         self.secret_key = secret_key
         self.base_url = API_URL  # 確保使用正確的變數名
+        self.default_window = DEFAULT_WINDOW
         self.time_offset = 0
+        self.logger = logging.getLogger(__name__)
         self._sync_server_time()
     
     def _sync_server_time(self):
@@ -39,16 +41,30 @@ class BackpackAPIClient:
             logger.error(f"時間同步失敗: {str(e)}")
             return False
 
-    def _generate_signature(self, message):
-        try:
-            # Ensure message is ASCII only
-            message = message.encode('ascii', errors='ignore').decode('ascii')
-            private_key = nacl.signing.SigningKey(base64.b64decode(self.secret_key))
-            signature = base64.b64encode(private_key.sign(message.encode('ascii')).signature).decode()
-            return signature
-        except Exception as e:
-            self.logger.error(f"簽名生成失敗: {str(e)}")
-            return ""
+    def _generate_signature(self, params, instruction="orderExecute"):
+        timestamp = str(int(time.time() * 1000) + self.time_offset)
+        window = str(self.default_window)
+        
+        # 排序參數
+        if isinstance(params, dict):
+            # 轉換布爾值
+            for k, v in params.items():
+                if isinstance(v, bool):
+                    params[k] = str(v).lower()
+            
+            sorted_params = sorted(params.items())
+            param_str = "&".join([f"{k}={v}" for k, v in sorted_params])
+        else:
+            param_str = params
+        
+        # 構建簽名消息
+        message = f"instruction={instruction}&{param_str}&timestamp={timestamp}&window={window}"
+        
+        # 生成簽名
+        private_key = nacl.signing.SigningKey(base64.b64decode(self.secret_key))
+        signature = base64.b64encode(private_key.sign(message.encode('ascii')).signature).decode()
+        
+        return signature
     
     def _generate_headers(self, instruction, params=None):
         """生成API請求頭"""
@@ -74,6 +90,23 @@ class BackpackAPIClient:
             "X-WINDOW": window,
             "Content-Type": "application/json"
         }
+    
+    async def place_order(self, symbol, side, order_type, price=None, size=None):
+        """兼容性方法，內部調用execute_order"""
+        order_details = {
+            "symbol": symbol,
+            "side": side,
+            "orderType": order_type
+        }
+        
+        if order_type.lower() == "limit":
+            order_details["price"] = str(price)
+            order_details["quantity"] = str(size)
+            order_details["timeInForce"] = "GTC"
+        else:  # Market
+            order_details["quantity"] = str(size)
+        
+        return await self.execute_order(order_details)
     
     def get_market_limits(self, symbol):
         """獲取市場限制"""

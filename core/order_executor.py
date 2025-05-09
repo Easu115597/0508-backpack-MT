@@ -8,36 +8,40 @@ class OrderExecutor:
         self.symbol = symbol
         self.logger = logging.getLogger(__name__)
 
-    async def place_limit_order(self, symbol, side, price, size):
+    async def place_limit_order(self, side, price, size):
         try:
-            order = await self.client.place_order(
-                symbol=symbol,
-                side=side,
-                order_type="limit",
-                price=price,
-                size=size
-            )
-            order_id = order["order_id"]
-            self.monitor.track_order(order_id, symbol)
-            self.logger.info(f"Placed limit order: {order_id} {side} {size}@{price}")
-            return order_id
+            order = await self.client.execute_order({
+                "symbol": self.symbol,  # 使用類屬性
+                "side": side,  # 應為"Bid"或"Ask"
+                "orderType": "Limit",
+                "price": f"{price:.2f}",  # 使用固定小數位格式
+                "quantity": f"{size:.8f}",  # 使用足夠的小數位
+                "timeInForce": "GTC",
+                
+            })
+            self.logger.info(f"限價單成功: {side} {size}@{price}")
+            return order
         except Exception as e:
             self.logger.error(f"Limit order failed: {e}")
             return None
-        
+    
     async def place_orders(self, order_plan):
         """批量下單"""
         placed_orders = []
         for order in order_plan:
             try:
+                # 移除symbol參數，只傳遞方法定義中的參數
                 result = await self.place_limit_order(
-                    symbol=self.symbol,
                     side=order["side"],
                     price=order["price"],
                     size=order["quantity"]
                 )
-                if result:
+                if result and 'id' in result:
                     placed_orders.append(result)
+                    self.logger.info(f"成功掛單: {order['side']} {order['quantity']}@{order['price']}")
+                else:
+                    self.logger.error(f"掛單失敗: {result}")
+                    
             except Exception as e:
                 self.logger.error(f"下單失敗: {e}")
         return placed_orders

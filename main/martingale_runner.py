@@ -21,11 +21,12 @@ class MartingaleRunner:
         self.client = BackpackAPIClient(
             api_key=settings.API_KEY,
             secret_key=settings.SECRET_KEY
+            
         )
         self.symbol = symbol
         
         # 初始化策略組件
-        self.strategy = MartingaleStrategy(settings, logger)
+        self.strategy = MartingaleStrategy(settings, logger, self.client)
         self.executor = OrderExecutor(self.client, self.symbol)
         self.monitor = OrderMonitor(self.client, self.symbol)
         
@@ -117,6 +118,7 @@ async def main():
     client = BackpackAPIClient(
         api_key=settings.API_KEY,
         secret_key=settings.SECRET_KEY
+        
     )
     runner = MartingaleRunner(client, settings, logger)
     await runner.run()

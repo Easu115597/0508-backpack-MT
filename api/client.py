@@ -119,33 +119,63 @@ class BackpackAPIClient:
     async def get_order(self, order_id, symbol):
         """獲取訂單狀態"""
         try:
+            # 嘗試獲取單個訂單
             endpoint = "/api/v1/order"
-            params = {
-                "orderId": order_id,
-                "symbol": symbol  # 使用傳入的symbol
-            }
+            params = {"orderId": order_id, "symbol": symbol}
             instruction = "orderQuery"
             
-            # 生成請求頭
             headers = self._generate_headers(instruction, params)
             
-            # 使用aiohttp進行異步請求
             async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.base_url}{endpoint}",
-                    params=params,
-                    headers=headers
-                ) as response:
+                async with session.get(f"{self.base_url}{endpoint}", params=params, headers=headers) as response:
                     if response.status == 200:
                         return await response.json()
+                    elif response.status == 404:
+                        # 如果訂單不存在，嘗試從訂單歷史中查詢
+                        return await self.get_order_from_history(order_id, symbol)
                     else:
                         error_msg = f"狀態碼: {response.status}, 消息: {await response.text()}"
                         self.logger.warning(f"獲取訂單失敗: {error_msg}")
                         return None
-                    
         except Exception as e:
             self.logger.error(f"獲取訂單異常: {str(e)}")
             return None
+        
+    async def get_order_from_history(self, order_id, symbol):
+        """從訂單歷史中查詢訂單"""
+        try:
+            endpoint = "/api/v1/orders/history"
+            params = {"orderId": order_id, "symbol": symbol}
+            instruction = "orderHistoryQueryAll"
+            
+            headers = self._generate_headers(instruction, params)
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.base_url}{endpoint}", params=params, headers=headers) as response:
+                    if response.status == 200:
+                        orders = await response.json()
+                        for order in orders:
+                            if order.get('id') == order_id:
+                                return order
+                    return None
+        except Exception as e:
+            self.logger.error(f"獲取訂單歷史異常: {str(e)}")
+            return None
+        
+    async def get_all_orders(self, symbol):
+        """獲取所有訂單（包括活動和歷史）"""
+        try:
+            # 先獲取活動訂單
+            active_orders = await self.get_active_orders(symbol)
+            
+            # 再獲取歷史訂單
+            history_orders = await self.get_order_history(symbol)
+            
+            # 合併結果
+            return active_orders + history_orders
+        except Exception as e:
+            self.logger.error(f"獲取所有訂單異常: {str(e)}")
+            return []
     
     async def get_ticker(self, symbol):
         """獲取指定交易對的行情信息"""
@@ -307,33 +337,33 @@ class BackpackAPIClient:
             logger.error(f"獲取未成交訂單失敗: {str(e)}")
             return {"error": str(e)}
     
-    def cancel_all_orders(self, symbol=None):
-        """取消所有訂單"""
-        endpoint = "/api/v1/orders"
-        instruction = "orderCancelAll"
-        params = {}
-        if symbol:
-            params["symbol"] = symbol.replace('-', '_').upper()
-        
-        headers = self._generate_headers(instruction, params)
-        
+    async def cancel_all_orders(self, symbol):
+        """取消指定交易對的所有未成交訂單"""
         try:
-            response = requests.delete(
-                f"{self.base_url}{endpoint}",
-                headers=headers,
-                params=params
-            )
+            endpoint = "/api/v1/orders"
+            payload = {"symbol": symbol}
+            instruction = "orderCancelAll"
             
-            if response.status_code == 200:
-                return response.json()
-            else:
-                error_msg = f"狀態碼: {response.status_code}, 消息: {response.text}"
-                logger.warning(f"請求失敗: {error_msg}")
-                return {"error": error_msg}
-                
+            # 生成請求頭
+            headers = self._generate_headers(instruction, payload)
+            
+            # 使用aiohttp進行異步請求
+            async with aiohttp.ClientSession() as session:
+                async with session.delete(
+                    f"{self.base_url}{endpoint}",
+                    json=payload,  # 使用json參數
+                    headers=headers
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()  # 確保返回的是協程
+                    else:
+                        error_msg = f"狀態碼: {response.status}, 消息: {await response.text()}"
+                        self.logger.warning(f"取消所有訂單失敗: {error_msg}")
+                        return None
+                                                        
         except Exception as e:
-            logger.error(f"取消訂單失敗: {str(e)}")
-            return {"error": str(e)}
+            self.logger.error(f"取消所有訂單異常: {str(e)}")
+            return None
     
     def get_fill_history(self, symbol=None, limit=100):
         """獲取成交歷史"""
@@ -362,3 +392,20 @@ class BackpackAPIClient:
         except Exception as e:
             logger.error(f"獲取成交歷史失敗: {str(e)}")
             return {"error": str(e)}
+        
+    async def get_market_info(self, symbol):
+        """獲取市場資訊，包括精度"""
+        try:
+            endpoint = "/api/v1/market"
+            params = {"symbol": symbol}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.base_url}{endpoint}", params=params) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        self.logger.error(f"獲取市場資訊失敗: {response.status}, {await response.text()}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"獲取市場資訊異常: {e}")
+            return None

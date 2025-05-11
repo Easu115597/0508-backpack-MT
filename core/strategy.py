@@ -24,10 +24,11 @@ class Strategy:
         return current_price <= avg_entry_price * (1 - self.stop_loss_pct)
     
 class MartingaleStrategy:
-    def __init__(self, settings, logger, client=None):
+    def __init__(self, settings, logger, client=None,precision_manager=None):
         self.settings = settings
         self.logger = logger
         self.client = client
+        self.precision_manager = precision_manager
         # 初始化策略狀態
         self.active_orders = []
         self.total_bought = 0  # 解決'total_bought'屬性缺失問題
@@ -36,24 +37,35 @@ class MartingaleStrategy:
         self.filled_orders = []
 
     async def generate_entry_orders(self):
-        """生成所有層級的入場訂單"""
+        """生成所有層級的訂單"""
         current_price = await self.get_current_price()
         self.logger.info(f"生成入場訂單，當前價格: {current_price}")
         
         # 分配資金到各層
         allocated_funds = self.allocate_funds()
+
+       
         
         orders = []
-        base_price = current_price * (1 - self.settings.PRICE_STEP_DOWN)
-        
-        # 首單
-        orders.append({
-            "price": round(base_price, 1),  # 根據交易所精度調整
-            "quantity": round(allocated_funds[0] / base_price, 5),
-            "type": "Limit",
-            "side": "Bid"
-        })
-        
+        # 為每一層生成訂單
+        for i in range(self.settings.MAX_LAYERS):
+            # 計算價格 - 每層遞減
+            price = current_price * (1 - self.settings.PRICE_STEP_DOWN * (i + 1))
+            
+            # 計算數量
+            quantity = allocated_funds[i] / price
+
+            # 使用精度管理器格式化價格和數量
+            formatted_price = await self.precision_manager.format_price(self.settings.SYMBOL, price)
+            formatted_quantity = await self.precision_manager.format_quantity(self.settings.SYMBOL, quantity)
+            
+            orders.append({
+                "price": formatted_price,  # 根據交易所精度調整
+                "quantity": formatted_quantity,
+                "type": "limit",
+                "side": "Bid"  # 使用"Bid"而非"buy"
+            })
+            
         return orders
     
     async def generate_orders(self):
@@ -84,20 +96,39 @@ class MartingaleStrategy:
         return orders
     
     def allocate_funds(self):
-        """分配資金到各層"""
+        """分配資金到各層 - 首單固定金額"""
         total = self.settings.ENTRY_SIZE_USDT
-        allocations = []
         
-        # 計算總權重
-        total_weight = sum(self.settings.MULTIPLIER ** i for i in range(self.settings.MAX_LAYERS))
-        
-        # 按權重分配資金
-        for i in range(self.settings.MAX_LAYERS):
-            weight = self.settings.MULTIPLIER ** i
-            allocation = total * weight / total_weight
-            allocations.append(allocation)
+        # 檢查是否使用固定首單金額
+        if self.settings.FIRST_ORDER_AMOUNT > 0:
+            first_order_amount = self.settings.FIRST_ORDER_AMOUNT
+            remaining_amount = total - first_order_amount  # 剩餘金額
             
-        return allocations
+            allocations = [first_order_amount]  # 首單固定金額
+            
+            # 計算剩餘層數的總權重
+            remaining_layers = self.settings.MAX_LAYERS - 1
+            if remaining_layers > 0:  # 確保至少有一個剩餘層
+                total_weight = sum(self.settings.MULTIPLIER ** i for i in range(remaining_layers))
+                
+                # 按權重分配剩餘資金
+                for i in range(1, self.settings.MAX_LAYERS):
+                    weight = self.settings.MULTIPLIER ** (i-1)
+                    allocation = remaining_amount * weight / total_weight
+                    allocations.append(allocation)
+            
+            return allocations
+        else:
+            # 原始的資金分配邏輯
+            total_weight = sum(self.settings.MULTIPLIER ** i for i in range(self.settings.MAX_LAYERS))
+            allocations = []
+            
+            for i in range(self.settings.MAX_LAYERS):
+                weight = self.settings.MULTIPLIER ** i
+                allocation = total * weight / total_weight
+                allocations.append(allocation)
+            
+            return allocations
     
     def calculate_pnl(self, avg_entry_price, current_price):
         """計算當前盈虧百分比"""

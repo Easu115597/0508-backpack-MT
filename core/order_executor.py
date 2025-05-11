@@ -3,21 +3,30 @@
 import logging
 
 class OrderExecutor:
-    def __init__(self, client, symbol):
+    def __init__(self, client, symbol, precision_manager=None):
         self.client = client
         self.symbol = symbol
         self.logger = logging.getLogger(__name__)
+        self.precision_manager = precision_manager
 
     async def place_limit_order(self, side, price, size):
         try:
+            # 使用精度管理器格式化價格和數量
+            if self.precision_manager:
+                formatted_price = await self.precision_manager.format_price(self.symbol, price)
+                formatted_size = await self.precision_manager.format_quantity(self.symbol, size)
+            else:
+                # 如果沒有精度管理器，使用默認格式化
+                formatted_price = round(price, 1)
+                formatted_size = round(size, 3)
+        
             order = await self.client.execute_order({
-                "symbol": self.symbol,  # 使用類屬性
-                "side": side,  # 應為"Bid"或"Ask"
+                "symbol": self.symbol,
+                "side": side,
                 "orderType": "Limit",
-                "price": f"{price:.2f}",  # 使用固定小數位格式
-                "quantity": f"{size:.8f}",  # 使用足夠的小數位
-                "timeInForce": "GTC",
-                
+                "price": str(formatted_price),
+                "quantity": str(formatted_size),
+                "timeInForce": "GTC"
             })
             self.logger.info(f"限價單成功: {side} {size}@{price}")
             return order

@@ -15,14 +15,19 @@ SYMBOL = os.getenv("SYMBOL", "SOL_USDC")
 
 
 # 策略參數
-TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", 0.033))      # 3.3%
+TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", 0.01))      # 3.3%
 STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", -0.3))         # -30%
-PRICE_STEP_DOWN = float(os.getenv("PRICE_STEP_DOWN", 0.015))     # -1.5%
+PRICE_STEP_DOWN = float(os.getenv("PRICE_STEP_DOWN", 0.005))     # -1.5%
 MULTIPLIER = float(os.getenv("MULTIPLIER", 1.3))
 USE_MARKET_ORDER = os.getenv("USE_MARKET_ORDER", "false").lower() == "false"
 ENTRY_SIZE_USDT = float(os.getenv("ENTRY_SIZE_USDT", 100))
-MAX_LAYERS = int(os.getenv("MAX_LAYERS", 3))  # 默認3層
+MAX_LAYERS = int(os.getenv("MAX_LAYERS", 5))  # 默認3層
+FIRST_ORDER_AMOUNT = float(os.getenv("FIRST_ORDER_AMOUNT", 40))  # 首單固定金額
 
+# 風險管理參數
+MAX_LOSS_PCT = float(os.getenv("MAX_LOSS_PCT", -0.1))  # 最大虧損比例，默認-10%
+EMERGENCY_STOP = os.getenv("EMERGENCY_STOP", "false").lower() == "true"  # 緊急停止開關
+SLIPPAGE_TOLERANCE = float(os.getenv("SLIPPAGE_TOLERANCE", 0.001))  # 滑點容忍度，默認0.1%
 
 # 監控設定
 ORDER_TIMEOUT_SEC = int(os.getenv("ORDER_TIMEOUT_SEC", 20))
@@ -46,6 +51,8 @@ class Settings:
         self.USE_MARKET_ORDER = USE_MARKET_ORDER
         self.SYMBOL = SYMBOL
         self.ORDER_TIMEOUT_SEC = ORDER_TIMEOUT_SEC
+        self.FIRST_ORDER_AMOUNT = 0  # 預設值為0，表示不使用固定首單金額
+        self.EMERGENCY_STOP = False  # 默認關閉緊急停止
     
     @classmethod
     def get_instance(cls):

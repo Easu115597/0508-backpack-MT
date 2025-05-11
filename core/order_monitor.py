@@ -41,6 +41,52 @@ class OrderMonitor:
                 return self.filled_orders[order_id]
             await asyncio.sleep(1)
         return None
+    
+    async def check_for_filled_orders(self):
+        """檢查是否有訂單成交"""
+        self.logger.debug(f"開始檢查訂單狀態，當前活動訂單: {list(self.active_orders.keys())}")
+        
+        for order_id in list(self.active_orders.keys()):
+            try:
+                self.logger.debug(f"嘗試獲取訂單 {order_id} 的狀態")
+                order_data = await self.client.get_order(order_id, self.symbol)
+                
+                if order_data:
+                    self.logger.debug(f"訂單 {order_id} 數據: {order_data}")
+                    if 'status' in order_data:
+                        status = order_data.get("status")
+                        self.logger.info(f"訂單 {order_id} 狀態: {status}")
+                        
+                        if status == "FILLED":
+                            self.logger.info(f"訂單 {order_id} 已成交")
+                            filled_order = self.active_orders.pop(order_id)
+                            filled_order['price'] = float(order_data.get('price', 0))
+                            filled_order['quantity'] = float(order_data.get('executedQty', 0))
+                            self.filled_orders[order_id] = filled_order
+                            return filled_order
+                else:
+                    # 如果get_order返回None，嘗試從訂單歷史中查詢
+                    self.logger.debug(f"無法通過get_order獲取訂單 {order_id}，嘗試從歷史查詢")
+                    history_data = await self.client.get_order_history(self.symbol, order_id)
+                    
+                    if history_data:
+                        self.logger.debug(f"從歷史查詢到訂單 {order_id}: {history_data}")
+                        # 處理歷史訂單數據
+                        for order in history_data:
+                            if order.get('id') == order_id and order.get('status') == "FILLED":
+                                self.logger.info(f"從歷史中發現已成交訂單 {order_id}")
+                                filled_order = self.active_orders.pop(order_id)
+                                filled_order['price'] = float(order.get('price', 0))
+                                filled_order['quantity'] = float(order.get('executedQty', 0))
+                                self.filled_orders[order_id] = filled_order
+                                return filled_order
+                    else:
+                        self.logger.warning(f"無法獲取訂單 {order_id} 的狀態")
+            except Exception as e:
+                self.logger.warning(f"訂單狀態檢查失敗: {e}")
+                self.logger.debug(f"檢查訂單 {order_id} 時出錯，詳細信息: {str(e)}", exc_info=True)
+        
+        return None
 
     async def update_statuses(self):
         for order_id in list(self.active_orders.keys()):

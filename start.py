@@ -2,12 +2,16 @@
 
 import asyncio
 import argparse
+import logging
 from dotenv import load_dotenv
 import os
 from main.martingale_runner import MartingaleRunner
 from config.settings import Settings
 from utils.logger import init_logger
 from api.client import BackpackAPIClient
+
+logger = init_logger(__name__)  # 或其他日誌初始化方式
+logger.setLevel(logging.DEBUG)
 
 load_dotenv()  # 載入.env文件
 
@@ -29,6 +33,9 @@ def parse_args():
     parser.add_argument('--entry-price', type=float, help='入場價格')
     parser.add_argument('--max-layers', type=int, default=3, help='最大層數')
     parser.add_argument('--total-capital', type=float, default=100, help='總資金')
+    parser.add_argument('--price-step-down', type=float, help='價格下降百分比')
+    parser.add_argument('--take-profit', type=float, help='止盈百分比')
+    parser.add_argument('--first-order-amount', type=float, help='首單固定金額')
     return parser.parse_args()
 
 async def main():
@@ -48,6 +55,12 @@ async def main():
         settings.MAX_LAYERS = args.max_layers
     if args.total_capital:
         settings.ENTRY_SIZE_USDT = args.total_capital
+    if args.price_step_down:
+        settings.PRICE_STEP_DOWN = args.price_step_down
+    if args.take_profit:
+        settings.TAKE_PROFIT_PCT = args.take_profit
+    if args.first_order_amount:
+        settings.FIRST_ORDER_AMOUNT = args.first_order_amount
 
     
 

@@ -8,6 +8,8 @@ import requests
 import logging
 import nacl.signing
 import aiohttp
+import asyncio
+import websockets
 from datetime import datetime
 
 
@@ -28,6 +30,7 @@ class BackpackAPIClient:
         self.time_offset = 0
         self.logger = logging.getLogger(__name__)
         self._sync_server_time()
+        
     
     def _sync_server_time(self):
         """同步服務器時間"""
@@ -308,6 +311,41 @@ class BackpackAPIClient:
         except Exception as e:
             logger.error(f"獲取餘額失敗: {str(e)}")
             return {"error": str(e)}
+        
+    async def get_order_history(self, symbol, order_id=None):
+        """獲取訂單歷史"""
+        try:
+            # 正確的端點應該是 /api/v1/history/orders
+            endpoint = "/api/v1/history/orders"
+            params = {"symbol": symbol}
+            if order_id:
+                params["orderId"] = order_id
+            
+            instruction = "orderHistoryQueryAll"
+            
+            # 生成請求頭
+            headers = self._generate_headers(instruction, params)
+            
+            self.logger.debug(f"獲取訂單歷史，參數: {params}")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.base_url}{endpoint}",
+                    params=params,
+                    headers=headers
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        self.logger.debug(f"獲取訂單歷史成功: {result}")
+                        return result
+                    else:
+                        error_msg = f"狀態碼: {response.status}, 消息: {await response.text()}"
+                        self.logger.warning(f"獲取訂單歷史失敗: {error_msg}")
+                        return None
+        except Exception as e:
+            self.logger.error(f"獲取訂單歷史異常: {str(e)}")
+            return None
+
     
     def get_open_orders(self, symbol=None):
         """獲取未成交訂單"""
@@ -409,3 +447,141 @@ class BackpackAPIClient:
         except Exception as e:
             self.logger.error(f"獲取市場資訊異常: {e}")
             return None
+        
+
+
+class BackpackWebSocketClient:
+    def __init__(self, api_key, secret_key, symbol, logger=None):
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.symbol = symbol
+        self.ws_url = "wss://ws.backpack.exchange"  # Backpack WebSocket URL
+        self.ws = None
+        self.connected = False
+        self.subscriptions = []
+        self.logger = logger or logging.getLogger(__name__)
+        self.reconnect_attempts = 0
+        self.max_reconnect_attempts = 10
+        self.reconnect_delay = 5  # 初始重連延遲（秒）
+        self.callbacks = {}
+        
+    async def connect(self):
+        """建立WebSocket連接"""
+        try:
+            self.ws = await websockets.connect(self.ws_url)
+            self.connected = True
+            self.reconnect_attempts = 0
+            self.logger.info(f"WebSocket連接成功: {self.ws_url}")
+            
+            # 啟動心跳檢測
+            asyncio.create_task(self._heartbeat())
+            
+            # 啟動訊息處理循環
+            asyncio.create_task(self._message_handler())
+            
+            return True
+        except Exception as e:
+            self.logger.error(f"WebSocket連接失敗: {e}")
+            return False
+    
+    async def _heartbeat(self):
+        """發送心跳以保持連接"""
+        while self.connected:
+            try:
+                if self.ws and self.ws.open:
+                    await self.ws.send(json.dumps({"op": "ping"}))
+                    self.logger.debug("發送心跳")
+                await asyncio.sleep(30)  # 每30秒發送一次心跳
+            except Exception as e:
+                self.logger.error(f"心跳發送失敗: {e}")
+                await self._reconnect()
+    
+    async def _reconnect(self):
+        """重新連接WebSocket"""
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            self.logger.error(f"達到最大重連嘗試次數({self.max_reconnect_attempts})，停止重連")
+            return False
+        
+        self.reconnect_attempts += 1
+        delay = self.reconnect_delay * (2 ** (self.reconnect_attempts - 1))  # 指數退避
+        self.logger.info(f"嘗試重連 ({self.reconnect_attempts}/{self.max_reconnect_attempts})，等待 {delay} 秒")
+        
+        await asyncio.sleep(delay)
+        
+        try:
+            await self.disconnect()
+            success = await self.connect()
+            if success:
+                # 重新訂閱之前的頻道
+                for sub in self.subscriptions:
+                    await self.subscribe(sub["channel"], sub["symbols"])
+                return True
+        except Exception as e:
+            self.logger.error(f"重連失敗: {e}")
+        
+        return False
+    
+    async def disconnect(self):
+        """關閉WebSocket連接"""
+        if self.ws:
+            await self.ws.close()
+            self.connected = False
+            self.logger.info("WebSocket連接已關閉")
+    
+    async def subscribe(self, channel, symbols=None):
+        """訂閱特定頻道的數據"""
+        if not self.connected:
+            await self.connect()
+        
+        symbols = symbols or [self.symbol]
+        
+        subscription = {
+            "op": "subscribe",
+            "channel": channel,
+            "symbols": symbols
+        }
+        
+        try:
+            await self.ws.send(json.dumps(subscription))
+            self.subscriptions.append({"channel": channel, "symbols": symbols})
+            self.logger.info(f"已訂閱: {channel} - {symbols}")
+            return True
+        except Exception as e:
+            self.logger.error(f"訂閱失敗: {e}")
+            return False
+    
+    async def _message_handler(self):
+        """處理接收到的WebSocket訊息"""
+        while self.connected:
+            try:
+                if self.ws:
+                    message = await self.ws.recv()
+                    data = json.loads(message)
+                    
+                    # 處理心跳回應
+                    if "pong" in data:
+                        self.logger.debug("收到心跳回應")
+                        continue
+                    
+                    # 處理訂閱確認
+                    if data.get("type") == "subscribed":
+                        self.logger.info(f"訂閱確認: {data}")
+                        continue
+                    
+                    # 處理不同類型的數據
+                    channel = data.get("channel")
+                    if channel and channel in self.callbacks:
+                        await self.callbacks[channel](data)
+                    else:
+                        self.logger.debug(f"收到未處理的訊息: {data}")
+            except websockets.exceptions.ConnectionClosed:
+                self.logger.warning("WebSocket連接已關閉，嘗試重連")
+                await self._reconnect()
+            except Exception as e:
+                self.logger.error(f"處理訊息時出錯: {e}")
+                await asyncio.sleep(1)
+    
+    def on(self, channel, callback):
+        """註冊頻道數據的回調函數"""
+        self.callbacks[channel] = callback
+        self.logger.info(f"已註冊 {channel} 頻道的回調函數")

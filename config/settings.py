@@ -13,6 +13,8 @@ API_KEY = os.getenv("BACKPACK_API_KEY")
 SECRET_KEY = os.getenv("SECRET_KEY")
 SYMBOL = os.getenv("SYMBOL", "SOL_USDC")
 
+WS_URL = "wss://ws.backpack.exchange"
+DEFAULT_WINDOW = 5000  # 默認窗口值，單位為毫秒
 
 # 策略參數
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", 0.01))      # 3.3%

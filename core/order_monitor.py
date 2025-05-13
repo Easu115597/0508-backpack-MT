@@ -43,48 +43,93 @@ class OrderMonitor:
         return None
     
     async def check_for_filled_orders(self):
-        """檢查是否有訂單成交"""
-        self.logger.debug(f"開始檢查訂單狀態，當前活動訂單: {list(self.active_orders.keys())}")
+        """基於無法獲取訂單的訊息推斷訂單成交"""
+        self.logger.info(f"檢查訂單成交狀態，當前活動訂單數: {len(self.active_orders)}")
         
-        for order_id in list(self.active_orders.keys()):
-            try:
-                self.logger.debug(f"嘗試獲取訂單 {order_id} 的狀態")
-                order_data = await self.client.get_order(order_id, self.symbol)
+        # 嘗試使用成交歷史API
+        try:
+            fill_history = await self.client.get_fill_history(self.symbol)
+            if fill_history:
+                self.logger.info(f"獲取到 {len(fill_history)} 條成交歷史記錄")
+                # 處理成交歷史...
+        except Exception as e:
+            self.logger.error(f"獲取成交歷史失敗: {e}")
+        
+        # 嘗試使用持倉API
+        try:
+            positions = await self.client.get_positions(self.symbol)
+            if positions:
+                for position in positions:
+                    if float(position.get('positionAmt', 0)) > 0:
+                        self.logger.info(f"發現持倉: {position}")
+                        # 處理持倉信息...
+        except Exception as e:
+            self.logger.error(f"獲取持倉信息失敗: {e}")
+        
+        # 基於"無法獲取訂單"訊息推斷訂單成交
+        filled_orders = []
+        
+        # 檢查self.active_orders的類型
+        if isinstance(self.active_orders, dict):
+            for order_id in list(self.active_orders.keys()):
+                try:
+                    order_data = await self.client.get_order(order_id, self.symbol)
+                    if order_data is None:
+                        # 無法獲取訂單，可能已成交
+                        self.logger.info(f"推斷訂單 {order_id} 可能已成交")
+                        filled_order = self.active_orders.pop(order_id)
+                        filled_orders.append(filled_order)
+                except Exception as e:
+                    self.logger.warning(f"訂單狀態檢查失敗: {e}")
+        elif isinstance(self.active_orders, list):
+            # 如果是列表，需要通過索引處理
+            i = 0
+            while i < len(self.active_orders):
+                order = self.active_orders[i]
+                if isinstance(order, dict) and 'id' in order:
+                    order_id = order['id']
+                    try:
+                        order_data = await self.client.get_order(order_id, self.symbol)
+                        if order_data is None:
+                            # 無法獲取訂單，可能已成交
+                            self.logger.info(f"推斷訂單 {order_id} 可能已成交")
+                            filled_order = self.active_orders.pop(i)
+                            filled_orders.append(filled_order)
+                            continue  # 不增加i，因為列表長度已減少
+                    except Exception as e:
+                        self.logger.warning(f"訂單狀態檢查失敗: {e}")
+                i += 1
+        
+        if filled_orders:
+            # 計算平均價格 - 添加類型檢查
+            total_value = 0
+            total_quantity = 0
+            
+            for order in filled_orders:
+                if isinstance(order, dict):
+                    price = order.get('price', 0)
+                    quantity = order.get('quantity', 0)
+                    if isinstance(price, (int, float)) and isinstance(quantity, (int, float)):
+                        total_value += price * quantity
+                        total_quantity += quantity
+            
+            avg_price = total_value / total_quantity if total_quantity > 0 else 0
+            
+            self.logger.info(f"推斷已成交訂單數: {len(filled_orders)}, 平均價格: {avg_price}")
+            
+            # 返回第一個成交訂單作為示例
+            if filled_orders and isinstance(filled_orders[0], dict):
+                filled_order = filled_orders[0]
+                filled_order['price'] = avg_price
+                filled_order['quantity'] = total_quantity
                 
-                if order_data:
-                    self.logger.debug(f"訂單 {order_id} 數據: {order_data}")
-                    if 'status' in order_data:
-                        status = order_data.get("status")
-                        self.logger.info(f"訂單 {order_id} 狀態: {status}")
-                        
-                        if status == "FILLED":
-                            self.logger.info(f"訂單 {order_id} 已成交")
-                            filled_order = self.active_orders.pop(order_id)
-                            filled_order['price'] = float(order_data.get('price', 0))
-                            filled_order['quantity'] = float(order_data.get('executedQty', 0))
-                            self.filled_orders[order_id] = filled_order
-                            return filled_order
-                else:
-                    # 如果get_order返回None，嘗試從訂單歷史中查詢
-                    self.logger.debug(f"無法通過get_order獲取訂單 {order_id}，嘗試從歷史查詢")
-                    history_data = await self.client.get_order_history(self.symbol, order_id)
-                    
-                    if history_data:
-                        self.logger.debug(f"從歷史查詢到訂單 {order_id}: {history_data}")
-                        # 處理歷史訂單數據
-                        for order in history_data:
-                            if order.get('id') == order_id and order.get('status') == "FILLED":
-                                self.logger.info(f"從歷史中發現已成交訂單 {order_id}")
-                                filled_order = self.active_orders.pop(order_id)
-                                filled_order['price'] = float(order.get('price', 0))
-                                filled_order['quantity'] = float(order.get('executedQty', 0))
-                                self.filled_orders[order_id] = filled_order
-                                return filled_order
-                    else:
-                        self.logger.warning(f"無法獲取訂單 {order_id} 的狀態")
-            except Exception as e:
-                self.logger.warning(f"訂單狀態檢查失敗: {e}")
-                self.logger.debug(f"檢查訂單 {order_id} 時出錯，詳細信息: {str(e)}", exc_info=True)
+                # 確保self.filled_orders是字典
+                if not hasattr(self, 'filled_orders'):
+                    self.filled_orders = {}
+                
+                order_id = filled_order.get('id', str(len(self.filled_orders)))
+                self.filled_orders[order_id] = filled_order
+                return filled_order
         
         return None
 

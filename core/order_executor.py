@@ -83,3 +83,26 @@ class OrderExecutor:
         """Close position with market order"""
         side = "sell"  # For long positions
         return await self.place_market_order(symbol, side, size)
+    
+    async def place_take_profit_order(self, symbol, quantity, price):
+        """掛出止盈訂單"""
+        try:
+            # 使用限價單作為止盈
+            order = await self.client.execute_order({
+                "symbol": symbol,
+                "side": "Ask",  # 賣出
+                "orderType": "Limit",
+                "price": str(price),
+                "quantity": str(quantity),
+                "timeInForce": "GTC"
+            })
+            
+            if order:
+                self.logger.info(f"止盈單成功: 賣出 {quantity} 個 {symbol} @ {price}")
+                return order
+            else:
+                self.logger.error("止盈單失敗: 無法創建限價單")
+                return None
+        except Exception as e:
+            self.logger.error(f"止盈單失敗: {e}")
+            return None

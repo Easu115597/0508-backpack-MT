@@ -85,24 +85,24 @@ class OrderExecutor:
         return await self.place_market_order(symbol, side, size)
     
     async def place_take_profit_order(self, symbol, quantity, price):
-        """掛出止盈訂單"""
+        """掛出止盈單"""
         try:
-            # 使用限價單作為止盈
-            order = await self.client.execute_order({
-                "symbol": symbol,
-                "side": "Ask",  # 賣出
-                "orderType": "Limit",
-                "price": str(price),
-                "quantity": str(quantity),
-                "timeInForce": "GTC"
-            })
-            
-            if order:
-                self.logger.info(f"止盈單成功: 賣出 {quantity} 個 {symbol} @ {price}")
-                return order
+            # 添加調試日誌
+            self.logger.info(f"嘗試掛出止盈單: 交易對={symbol}, 數量={quantity}, 價格={price}")
+            # 使用與place_orders相同的place_limit_order方法
+            tp_order = await self.executor.place_limit_order(
+                side="Ask",  # 賣出方向
+                price=price,
+                size=quantity
+            )
+
+            if tp_order and 'id' in tp_order:
+                self.logger.info(f"止盈單已掛出: 價格={price}, 數量={quantity}")
+                return tp_order
             else:
-                self.logger.error("止盈單失敗: 無法創建限價單")
+                self.logger.error(f"掛出止盈單失敗: {tp_order}")
                 return None
         except Exception as e:
-            self.logger.error(f"止盈單失敗: {e}")
+            self.logger.error(f"掛出止盈單時發生錯誤: {e}")
             return None
+       

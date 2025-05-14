@@ -40,12 +40,20 @@ class MartingaleRunner:
             logger=logger
         )
         
+        # 添加調試日誌
+        #self.logger.info(f"executor對象是否有place_limit_order方法: {hasattr(self.executor, 'place_limit_order')}")
+        #self.logger.info(f"executor對象是否有place_take_profit_order方法: {hasattr(self.executor, 'place_take_profit_order')}")
+
+
         # 註冊訂單更新回調
         self.ws.on("account.orderUpdate", self.on_order_update)
-        
+       
 
         # 添加交易統計
         self.stats = TradeStats(symbol)
+
+        # 添加tp_order_id屬性來跟踪當前的止盈單
+        self.tp_order_id = None
         
         # 創建精度管理器
         self.precision_manager = PrecisionManager(client, logger)
@@ -164,21 +172,22 @@ class MartingaleRunner:
             
             # 檢查是否是訂單成交消息
             event_type = data.get("e")
+            
             if event_type == "orderFill":
-                # 處理訂單成交
-                order_id = data.get("i")  # 訂單ID
+                # 訂單已成交
+                order_id = data.get("i")
                 price = float(data.get("L", 0))  # 成交價格
                 quantity = float(data.get("l", 0))  # 成交數量
-                side = data.get("S")  # 買賣方向
+                side = data.get("S")
                 
                 self.logger.info(f"訂單成交: ID={order_id}, 價格={price}, 數量={quantity}, 方向={side}")
                 
                 # 更新持倉狀態
-                if side == "BUY":
+                if side == "Bid":  # 買入訂單
                     self.holding_position = True
                     
                     # 更新入場價格
-                    if not self.entry_price:
+                    if not hasattr(self, 'entry_price') or self.entry_price is None:
                         self.entry_price = price
                         self.total_bought = quantity
                     else:
@@ -189,38 +198,87 @@ class MartingaleRunner:
                     
                     self.logger.info(f"更新持倉: 總數量={self.total_bought}, 平均價格={self.entry_price}")
                     
-                    # 計算止盈價格
-                    take_profit_price = self.entry_price * (1 + self.settings.TAKE_PROFIT_PCT)
-                    self.logger.info(f"預計止盈價格: {take_profit_price:.2f}")
+                    # 從活動訂單列表中移除已成交的訂單
+                    self.active_orders = [order for order in self.active_orders if order.get('id') != order_id]
                     
-                    # 可選：立即掛出止盈單
+                    # 計算新的止盈價格
+                    take_profit_price = self.entry_price * (1 + self.settings.TAKE_PROFIT_PCT)
+                    self.logger.info(f"更新止盈價格: {take_profit_price:.2f}")
+                    
+                    # 取消之前的止盈單（如果有）
+                    if hasattr(self, 'tp_order_id') and self.tp_order_id:
+                        try:
+                            await self.client.cancel_order(self.tp_order_id, self.symbol)
+                            self.logger.info(f"已取消舊的止盈單: {self.tp_order_id}")
+                            self.tp_order_id = None
+                        except Exception as e:
+                            self.logger.error(f"取消舊止盈單失敗: {e}")
+                    
+                    # 掛出新的止盈單
                     try:
-                        tp_order = await self.executor.place_take_profit_order(
-                            self.symbol, 
-                            self.total_bought, 
-                            take_profit_price
+                        # 使用executor的place_limit_order方法
+                        tp_order = await self.executor.place_limit_order(
+                            side="Ask",  # 賣出方向
+                            price=take_profit_price,
+                            size=self.total_bought  # 使用size而不是quantity
                         )
                         if tp_order:
-                            self.logger.info(f"止盈單已掛出: {tp_order}")
+                            self.tp_order_id = tp_order.get('id')
+                            self.logger.info(f"新止盈單已掛出: {tp_order}")
                     except Exception as e:
                         self.logger.error(f"掛出止盈單失敗: {e}")
                 
-                # 記錄成交訂單
-                if hasattr(self.stats, 'record_filled_order'):
-                    filled_order = {
-                        'id': order_id,
-                        'price': price,
-                        'quantity': quantity,
-                        'side': side,
-                        'status': 'FILLED'
-                    }
-                    self.stats.record_filled_order(filled_order)
-            
-            # 處理其他訂單事件
-            elif event_type == "orderNew":
-                self.logger.info(f"新訂單創建: {data}")
-            elif event_type == "orderCancelled":
-                self.logger.info(f"訂單取消: {data}")
+                # 如果是止盈單成交
+                elif side == "Ask" and self.holding_position:  # 賣出訂單
+                    self.logger.info(f"止盈單成交: 價格={price}, 數量={quantity}")
+                    
+                    # 計算利潤
+                    profit = (price - self.entry_price) * quantity
+                    self.logger.info(f"止盈成功，利潤: {profit:.4f} USDC")
+                    
+                    # 取消所有剩餘的買單
+                    try:
+                        cancel_result = await self.client.cancel_all_orders(self.symbol)
+                        self.logger.info(f"已取消所有剩餘訂單: {cancel_result}")
+                        self.active_orders = []
+                    except Exception as e:
+                        self.logger.error(f"取消剩餘訂單失敗: {e}")
+                    
+                    # 重置持倉狀態
+                    self.holding_position = False
+                    self.entry_price = None
+                    self.total_bought = 0
+                    self.tp_order_id = None
+                    
+                    # 記錄循環結束
+                    if hasattr(self.stats, 'record_cycle_end'):
+                        cycle_stats = self.stats.record_cycle_end(profit)
+                        cycle_id = cycle_stats.get('cycle_id', 'unknown') if cycle_stats else 'unknown'
+                        self.logger.info(f"交易循環 #{cycle_id} 完成，利潤: {profit:.4f} USDC")
+                    
+                    # 開始新的循環
+                    if hasattr(self.stats, 'record_cycle_start'):
+                        self.stats.record_cycle_start()
+                        self.logger.info(f"開始新的交易循環 #{self.stats.total_cycles}")
+                    
+                    # 以止盈價格向下price_step_down開始掛新的5階梯訂單
+                    current_price = price
+                    self.logger.info(f"以止盈價格 {current_price} 為基準，開始掛新的入場訂單")
+                    
+                    # 生成新的訂單計劃
+                    order_plan = []
+                    for i in range(self.settings.MAX_LAYERS):
+                        step_price = current_price * (1 - self.settings.PRICE_STEP_DOWN_PCT * (i + 1))
+                        step_amount = self.settings.FIRST_ORDER_AMOUNT * (2 ** i)
+                        order_plan.append({
+                            'price': step_price,
+                            'quantity': step_amount / step_price
+                        })
+                    
+                    # 掛出新的入場訂單
+                    self.active_orders = await self.executor.place_orders(order_plan)
+                    if self.active_orders:
+                        self.logger.info(f"成功掛出 {len(self.active_orders)} 個新的限價單")
         except Exception as e:
             self.logger.error(f"處理訂單更新失敗: {e}")
 

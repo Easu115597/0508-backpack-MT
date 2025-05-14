@@ -479,9 +479,8 @@ class BackpackAPIClient:
                 
                 subscription_data = {
                     "method": "SUBSCRIBE",
-                    "params": params,
-                    "id": timestamp,
-                    "signature": [
+                    "params": [
+                        f"{channel}.{symbol}",
                         self.api_key,
                         signature,
                         str(timestamp),

@@ -17,7 +17,7 @@ class BackpackWebSocketClient:
         self.api_key = api_key
         self.secret_key = secret_key
         self.symbol = symbol
-        self.ws_url = "wss://ws.backpack.exchange"  # Backpack WebSocket URL
+        self.ws_url = "wss://ws.backpack.exchange" # Backpack WebSocket URL
         self.ws = None
         self.connected = False
         self.subscriptions = []
@@ -107,9 +107,9 @@ class BackpackWebSocketClient:
         try:
             # 最簡單的訂閱格式
             subscription_data = {
-                "op": "subscribe",
-                "args": [f"{channel}.{symbol}" for symbol in symbols]
-            }
+            "method": "SUBSCRIBE",
+            "params": [f"{channel}.{symbol}" for symbol in symbols]
+        }
             
             self.logger.debug(f"訂閱數據: {json.dumps(subscription_data)}")
             
@@ -155,13 +155,17 @@ class BackpackWebSocketClient:
                         continue
                     
                     # 處理訂單更新
-                    event_type = data.get("e")
-                    if event_type:
-                        channel = "account.orderUpdate"  # 假設這是訂單更新頻道
-                        if channel in self.callbacks:
-                            await self.callbacks[channel](data)
-                        else:
-                            self.logger.debug(f"收到未處理的事件: {event_type}, 數據: {data}")
+                    if "stream" in data and "data" in data:
+                        stream = data["stream"]
+                        event_data = data["data"]
+                        
+                        # 訂單更新數據流
+                        if stream.startswith("account.orderUpdate"):
+                            self.logger.info(f"收到訂單更新: {event_data}")
+                            
+                            # 調用回調函數
+                            if "account.orderUpdate" in self.callbacks:
+                                await self.callbacks["account.orderUpdate"](event_data)
                     else:
                         self.logger.debug(f"收到未處理的訊息: {data}")
             except websockets.exceptions.ConnectionClosed:
@@ -171,58 +175,55 @@ class BackpackWebSocketClient:
             except Exception as e:
                 self.logger.error(f"處理訊息時出錯: {e}", exc_info=True)
                 await asyncio.sleep(1)
-        self.logger.debug("消息處理任務結束")
 
     async def subscribe_account_updates(self):
         """訂閱賬戶更新（專門方法）"""
-        if not self.connected:
-            await self.connect()
-        
         try:
-            # 生成簽名
-            timestamp = int(time.time() * 1000)
-            window = 5000
+            # 檢查WebSocket連接狀態
+            if not self.ws:
+                self.logger.warning("WebSocket未連接，嘗試連接")
+                connected = await self.connect()
+                if not connected:
+                    self.logger.error("WebSocket連接失敗，無法訂閱")
+                    return False
             
-            # 構建簽名消息
-            message = f"{timestamp}subscribe{window}"
+            # 生成簽名
+            timestamp = str(int(time.time() * 1000))
+            window = "5000"  # 使用字符串
+            
+            # 構建簽名消息 - 使用與成功代碼相同的格式
+            message_to_sign = f"instruction=subscribe&timestamp={timestamp}&window={window}"
             
             # 使用ED25519簽名
             private_key_bytes = base64.b64decode(self.secret_key)
             signing_key = nacl.signing.SigningKey(private_key_bytes)
             
             # 簽名
-            signed = signing_key.sign(message.encode('ascii'))
+            signed = signing_key.sign(message_to_sign.encode('ascii'))
             signature = base64.b64encode(signed.signature).decode()
             
-            # 準備訂閱數據
-            subscription = {
-                "op": "auth",
-                "key": self.api_key,
-                "timestamp": str(timestamp),
-                "window": str(window),
-                "signature": signature
+            # 使用正確的訂閱格式
+            subscription_data = {
+                "method": "SUBSCRIBE",
+                "params": ["account.orderUpdate"],  # 不包含交易對
+                "signature": [
+                    self.api_key,
+                    signature,
+                    timestamp,
+                    window
+                ]
             }
             
-            self.logger.debug(f"認證數據: {json.dumps({**subscription, 'signature': 'SIGNATURE'})}")
+            self.logger.debug(f"訂閱數據: {json.dumps({**subscription_data, 'signature': [self.api_key, 'SIGNATURE', timestamp, window]})}")
             
-            # 發送認證請求
-            await self.ws.send(json.dumps(subscription))
-            
-            # 等待認證響應
-            await asyncio.sleep(1)
-            
-            # 發送訂閱請求
-            subscribe_msg = {
-                "op": "subscribe",
-                "args": [f"account.orderUpdate.{self.symbol}"]
-            }
-            
-            self.logger.debug(f"訂閱數據: {json.dumps(subscribe_msg)}")
-            
-            await self.ws.send(json.dumps(subscribe_msg))
-            self.subscriptions.append({"channel": "account.orderUpdate", "symbols": [self.symbol]})
-            self.logger.info(f"已訂閱: account.orderUpdate - [{self.symbol}]")
-            return True
+            if self.ws:
+                await self.ws.send(json.dumps(subscription_data))
+                self.subscriptions.append({"channel": "account.orderUpdate", "symbols": [self.symbol]})
+                self.logger.info(f"已訂閱: account.orderUpdate")
+                return True
+            else:
+                self.logger.error("WebSocket未連接，無法發送訂閱請求")
+                return False
         except Exception as e:
             self.logger.error(f"訂閱賬戶更新失敗: {e}", exc_info=True)
             return False
